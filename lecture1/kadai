@@ -1,0 +1,136 @@
+import requests
+from bs4 import BeautifulSoup
+import sqlite3
+import time
+
+db_name = "google_repos_all.db"
+conn = sqlite3.connect(db_name)
+cursor = conn.cursor()
+
+cursor.execute("DROP TABLE IF EXISTS repositories")
+cursor.execute("""
+    CREATE TABLE repositories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        language TEXT,
+        stars INTEGER
+    )
+""")
+conn.commit()
+
+base_url = "https://github.com/orgs/google/repositories"
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+}
+
+MAX_PAGES = 100
+
+total_saved = 0
+KNOWN_LANGUAGES = ["Python", "Java", "C++", "C", "Go", "JavaScript", "TypeScript", "HTML", "Dart", "Rust", "Shell", "Kotlin", "Swift", "Jupyter Notebook"]
+
+print(f"Scraping Start: {base_url}")
+print(f"Target Pages: {MAX_PAGES} (Approx. 3-5 mins)")
+
+for page_num in range(1, MAX_PAGES + 1):
+    target_url = f"{base_url}?page={page_num}"
+    print(f"Processing Page {page_num:<3} ... ", end="", flush=True)
+
+    try:
+        response = requests.get(target_url, headers=headers, timeout=10)
+
+        if response.status_code != 200:
+            print(f"Error: Status {response.status_code}")
+            break
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        all_lis = soup.find_all("li")
+        count_in_page = 0
+
+        for li in all_lis:
+            # リポジトリ名の取得
+            h3 = li.find("h3")
+            if not h3: continue
+            link = h3.find("a")
+            if not link: continue
+
+            # Googleのリポジトリリンクか確認
+            href = link.get("href")
+            if not href or "google" not in href: continue
+
+            repo_name = link.get_text(strip=True)
+
+            # --- プログラミング言語 ---
+            language = "Unknown"
+
+            # 1. itemprop属性
+            lang_tag = li.find("span", itemprop="programmingLanguage")
+            if lang_tag:
+                language = lang_tag.get_text(strip=True)
+
+            # 2. カラードットの親要素
+            if language == "Unknown":
+                color_dot = li.find("span", class_=lambda c: c and "repo-language-color" in c)
+                if color_dot and color_dot.parent:
+                    text = color_dot.parent.get_text(strip=True)
+                    for lang in KNOWN_LANGUAGES:
+                        if lang in text:
+                            language = lang
+                            break
+                    if language == "Unknown" and len(text) < 20:
+                         language = text.replace("●", "").strip()
+
+            # 3. テキスト全体から探索
+            if language == "Unknown":
+                full_text = li.get_text()
+                for lang in KNOWN_LANGUAGES:
+                    if lang in full_text:
+                        language = lang
+                        break
+
+            # --- スター数 ---
+            stars = 0
+            star_link = li.find("a", href=lambda h: h and h.endswith("/stargazers"))
+            if star_link:
+                raw_star = star_link.get_text(strip=True).replace(",", "")
+                try:
+                    if "k" in raw_star:
+                         stars = int(float(raw_star.replace("k", "")) * 1000)
+                    else:
+                         stars = int(raw_star)
+                except:
+                    stars = 0
+
+            # 保存
+            cursor.execute("INSERT INTO repositories (name, language, stars) VALUES (?, ?, ?)",
+                           (repo_name, language, stars))
+            count_in_page += 1
+
+        conn.commit()
+
+        if count_in_page > 0:
+            print(f"Done. ({count_in_page} repos)")
+            total_saved += count_in_page
+        else:
+            print("No repos found. (End of list).")
+            break
+
+        time.sleep(1)
+
+    except Exception as e:
+        print(f"\nError: {e}")
+        break
+
+print("-" * 50)
+print(f"Scraping Completed. Total Repositories Saved: {total_saved}")
+
+print("\n--- Top 30 Starred Repositories ---")
+cursor.execute("SELECT name, language, stars FROM repositories ORDER BY stars DESC LIMIT 30")
+rows = cursor.fetchall()
+
+print(f"{'Rank':<5} | {'Repository Name':<35} | {'Language':<15} | {'Stars':<10}")
+print("-" * 75)
+for i, row in enumerate(rows, 1):
+    print(f"{i:<5} | {row[0]:<35} | {row[1]:<15} | {row[2]:<10}")
+
+conn.close()
