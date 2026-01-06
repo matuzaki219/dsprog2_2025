@@ -119,7 +119,7 @@ class WeatherApp(ft.Container):
             )
             self.content_area.controls.append(tile)
 def main(page: ft.Page):
-    page.title = "気象庁 天気予報アプリ"
+    page.title = "気象庁天気予報アプリ"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.horizontal_alignment = "stretch"
     page.vertical_alignment = "stretch"
